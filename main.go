@@ -1,29 +1,76 @@
 package main
 
 import (
-    "fmt"
-    "net/http"
+	"fmt"
+	"net/http"
+	"sync/atomic"
 )
 
+type apiConfig struct {
+	fileserverHits atomic.Int32
+}
+
+func (cfg *apiConfig) middlewareMetricsInc(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Increment the hit counter safely
+		cfg.fileserverHits.Add(1)
+
+		// Call the next handler
+		next.ServeHTTP(w, r)
+	})
+}
+
+func (cfg *apiConfig) handlerMetrics(w http.ResponseWriter, r *http.Request) {
+	// Fetch the current count
+	hits := cfg.fileserverHits.Load()
+
+	// Respond with the hits count
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	fmt.Fprintf(w, "Hits: %d", hits)
+}
+
+func (cfg *apiConfig) handlerReset(w http.ResponseWriter, r *http.Request) {
+	// Reset the counter safely
+	cfg.fileserverHits.Store(0)
+
+	// Respond with success message
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	fmt.Fprintln(w, "Hits reset to 0")
+}
+
 func main() {
-    // Create a new ServeMux
-    mux := http.NewServeMux()
+	// Create API config instance
+	apiCfg := apiConfig{}
 
-    // Handle the root route to serve index.html
-    mux.Handle("/", http.FileServer(http.Dir(".")))
+	// Create a new ServeMux
+	mux := http.NewServeMux()
 
-    // Handle the /assets route to serve the logo.png file
-    mux.Handle("/assets/", http.StripPrefix("/assets", http.FileServer(http.Dir("./assets"))))
+	// Readiness check endpoint
+	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprintln(w, "OK")
+	})
 
-    // Create the server with the ServeMux as the handler
-    server := &http.Server{
-        Addr:    ":8080",
-        Handler: mux,
-    }
+	// Fileserver path
+	fs := http.StripPrefix("/app/", http.FileServer(http.Dir(".")))
+	mux.Handle("/app/", apiCfg.middlewareMetricsInc(fs)) // Wrap fileserver with middleware
 
-    fmt.Println("Starting server on http://localhost:8080.")
-    // Start the server
-    if err := server.ListenAndServe(); err != nil {
-        fmt.Println("Error starting the server:", err)
-    }
+	// Register /metrics endpoint
+	mux.HandleFunc("/metrics", apiCfg.handlerMetrics)
+
+	// Register /reset endpoint
+	mux.HandleFunc("/reset", apiCfg.handlerReset)
+
+	// Create the HTTP server
+	server := &http.Server{
+		Addr:    ":8080",
+		Handler: mux,
+	}
+
+	// Start the server
+	fmt.Println("Starting server on http://localhost:8080")
+	server.ListenAndServe()
 }
