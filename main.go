@@ -9,18 +9,21 @@ func main() {
     // Create a new ServeMux
     mux := http.NewServeMux()
 
-    // Handle the root path and serve the index.html file
-    mux.Handle("/", http.FileServer(http.Dir("."))) // Serve files from the current directory
+    // Handle the root route to serve index.html
+    mux.Handle("/", http.FileServer(http.Dir(".")))
 
-    // Create a new server with the ServeMux and set the Addr to ":8080"
+    // Handle the /assets route to serve the logo.png file
+    mux.Handle("/assets/", http.StripPrefix("/assets", http.FileServer(http.Dir("./assets"))))
+
+    // Create the server with the ServeMux as the handler
     server := &http.Server{
-        Addr:    ":8080", // Bind to localhost:8080
-        Handler: mux,     // Set the mux as the handler
+        Addr:    ":8080",
+        Handler: mux,
     }
 
-    // Start the server
     fmt.Println("Starting server on http://localhost:8080.")
+    // Start the server
     if err := server.ListenAndServe(); err != nil {
-        fmt.Println("Error starting server:", err)
+        fmt.Println("Error starting the server:", err)
     }
 }
