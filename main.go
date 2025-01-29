@@ -10,67 +10,73 @@ type apiConfig struct {
 	fileserverHits atomic.Int32
 }
 
-func (cfg *apiConfig) middlewareMetricsInc(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Increment the hit counter safely
-		cfg.fileserverHits.Add(1)
+func (cfg *apiConfig) handlerHealthz(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		return
+	}
 
-		// Call the next handler
-		next.ServeHTTP(w, r)
-	})
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	fmt.Fprintln(w, "OK")
 }
 
 func (cfg *apiConfig) handlerMetrics(w http.ResponseWriter, r *http.Request) {
-	// Fetch the current count
-	hits := cfg.fileserverHits.Load()
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		return
+	}
 
-	// Respond with the hits count
+	hits := cfg.fileserverHits.Load()
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
 	fmt.Fprintf(w, "Hits: %d", hits)
 }
 
-func (cfg *apiConfig) handlerReset(w http.ResponseWriter, r *http.Request) {
-	// Reset the counter safely
-	cfg.fileserverHits.Store(0)
+func (cfg *apiConfig) middlewareMetricsInc(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Increment the fileserverHits counter
+		cfg.fileserverHits.Add(1)
+		// Call the next handler in the chain
+		next.ServeHTTP(w, r)
+	})
+}
 
-	// Respond with success message
+func (cfg *apiConfig) handlerReset(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	cfg.fileserverHits.Store(0)
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
 	fmt.Fprintln(w, "Hits reset to 0")
 }
 
 func main() {
-	// Create API config instance
 	apiCfg := apiConfig{}
 
-	// Create a new ServeMux
 	mux := http.NewServeMux()
 
-	// Readiness check endpoint
-	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-		w.WriteHeader(http.StatusOK)
-		fmt.Fprintln(w, "OK")
-	})
+	// Readiness check (GET only) → Now at /api/healthz
+	mux.HandleFunc("/api/healthz", apiCfg.handlerHealthz)
 
-	// Fileserver path
+	// Fileserver (middleware for tracking hits) → Stays at /app/
 	fs := http.StripPrefix("/app/", http.FileServer(http.Dir(".")))
-	mux.Handle("/app/", apiCfg.middlewareMetricsInc(fs)) // Wrap fileserver with middleware
+	mux.Handle("/app/", apiCfg.middlewareMetricsInc(fs))
 
-	// Register /metrics endpoint
-	mux.HandleFunc("/metrics", apiCfg.handlerMetrics)
+	// Metrics (GET only) → Now at /api/metrics
+	mux.HandleFunc("/api/metrics", apiCfg.handlerMetrics)
 
-	// Register /reset endpoint
-	mux.HandleFunc("/reset", apiCfg.handlerReset)
+	// Reset counter (POST only) → Now at /api/reset
+	mux.HandleFunc("/api/reset", apiCfg.handlerReset)
 
-	// Create the HTTP server
 	server := &http.Server{
 		Addr:    ":8080",
 		Handler: mux,
 	}
 
-	// Start the server
 	fmt.Println("Starting server on http://localhost:8080")
 	server.ListenAndServe()
 }
